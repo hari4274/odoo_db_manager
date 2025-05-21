@@ -192,7 +192,7 @@ Please include tests and update documentation as needed.
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
 
 ## Contact
-For questions or support, open an issue or contact [your-username] on GitHub.
+For questions or support, open an issue or contact [Hariprasath](https://www.linkedin.com/in/hari4274).
 
 ---
 

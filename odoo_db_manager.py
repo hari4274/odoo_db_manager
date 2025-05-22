@@ -27,17 +27,14 @@ def setup_logging(verbose=True, log_file=None, log_dir=None):
     logger = logging.getLogger('odoo_db_manager')
     logger.setLevel(level)
     
-    # Clear any existing handlers
     logger.handlers = []
     
-    # Console handler
     console_handler = logging.StreamHandler()
     console_handler.setLevel(level)
     console_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
     
-    # File handler
     if not log_file:
         log_file = os.path.join(log_dir or '.', 'odoo_db_manager.log')
     try:
@@ -73,7 +70,6 @@ def read_odoo_config(config_file, logger):
     if config_file and os.path.exists(config_file):
         config.read(config_file)
         options = config['options'] if 'options' in config else {}
-        # Try to determine log directory
         if options.get('logfile'):
             log_dir = os.path.dirname(options['logfile'])
         elif options.get('log_dir'):
@@ -135,7 +131,7 @@ def read_backup_config(config_file, logger):
 
 def create_odoo_backup(db_name, filestore_path, backup_dir, db_user="odoo", db_host="localhost", db_port="5432", db_password=None, with_filestore=True, logger=None, temp_dir=None):
     """
-    Create a backup of an Odoo instance, including database dump and optionally filestore, compressed into a ZIP file.
+    Create a backup of an Odoo instance, including SQL dump and optionally filestore, compressed into a ZIP file.
     
     Args:
         db_name (str): Name of the PostgreSQL database to back up.
@@ -160,25 +156,23 @@ def create_odoo_backup(db_name, filestore_path, backup_dir, db_user="odoo", db_h
     backup_filepath = os.path.join(backup_dir, backup_filename)
     
     with tempfile.TemporaryDirectory() as temp_dir:
-        dump_file = os.path.join(temp_dir, f"{db_name}.dump")
+        dump_file = os.path.join(temp_dir, f"{db_name}.sql")
         psql_log = os.path.join(temp_dir, "pg_dump.log")
         env = os.environ.copy()
         if db_password:
             env["PGPASSWORD"] = db_password
         
-        logger.debug(f"Creating custom-format database dump at {dump_file}, PostgreSQL logs at {psql_log}")
         try:
-            with open(psql_log, 'w') as log_file:
+            logger.debug(f"Creating SQL dump at {dump_file}, PostgreSQL logs at {psql_log}")
+            with open(psql_log, 'w') as log_file, open(dump_file, 'w') as dump_out:
                 subprocess.run([
                     "pg_dump",
-                    "-F", "c",
                     "-U", db_user,
                     "-h", db_host,
                     "-p", db_port,
-                    "-f", dump_file,
                     db_name
-                ], check=True, env=env, stdout=log_file, stderr=log_file)
-        except subprocess.CalledProcessError as e:
+                ], check=True, env=env, stdout=dump_out, stderr=log_file)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
             with open(psql_log, 'r') as log_file:
                 psql_output = log_file.read()
             logger.error(f"Database dump failed for {db_name}: {e}\nPostgreSQL output: {psql_output}")
@@ -187,7 +181,7 @@ def create_odoo_backup(db_name, filestore_path, backup_dir, db_user="odoo", db_h
         logger.debug(f"Creating ZIP file at {backup_filepath}")
         try:
             with zipfile.ZipFile(backup_filepath, 'w', compression=zipfile.ZIP_DEFLATED, compresslevel=9) as zipf:
-                zipf.write(dump_file, "dump.dump")
+                zipf.write(dump_file, "dump.sql")
                 if with_filestore:
                     filestore_db_path = os.path.join(filestore_path, db_name)
                     if os.path.exists(filestore_db_path):
@@ -212,7 +206,7 @@ def create_odoo_backup(db_name, filestore_path, backup_dir, db_user="odoo", db_h
 
 def restore_odoo_backup(backup_filepath, db_name, filestore_path, db_user="odoo", db_host="localhost", db_port="5432", db_password=None, drop_existing=False, with_filestore=True, logger=None, temp_dir=None):
     """
-    Restore an Odoo backup from a ZIP file, including database and optionally filestore.
+    Restore an Odoo backup from a ZIP file, including SQL dump and optionally filestore.
     
     Args:
         backup_filepath (str): Path to the backup ZIP file.
@@ -232,7 +226,6 @@ def restore_odoo_backup(backup_filepath, db_name, filestore_path, db_user="odoo"
     """
     logger.info(f"Starting restore for database {db_name} from {backup_filepath} {'with' if with_filestore else 'without'} filestore")
     
-    # Validate ZIP file integrity
     try:
         with zipfile.ZipFile(backup_filepath, 'r') as zipf:
             zipf.testzip()
@@ -242,19 +235,17 @@ def restore_odoo_backup(backup_filepath, db_name, filestore_path, db_user="odoo"
     
     with tempfile.TemporaryDirectory() as temp_dir:
         logger.debug(f"Extracting ZIP file to {temp_dir}")
-        # Extract the ZIP file
         with zipfile.ZipFile(backup_filepath, 'r') as zipf:
             zipf.extractall(temp_dir)
         
-        # Restore the database dump
-        dump_file = os.path.join(temp_dir, "dump.dump")
+        dump_file = os.path.join(temp_dir, "dump.sql")
         psql_log = os.path.join(temp_dir, "psql_restore.log")
         env = os.environ.copy()
         if db_password:
             env["PGPASSWORD"] = db_password
         
-        try:
-            if drop_existing:
+        if drop_existing:
+            try:
                 logger.debug(f"Terminating connections to database {db_name}")
                 with open(psql_log, 'w') as log_file:
                     subprocess.run([
@@ -265,7 +256,13 @@ def restore_odoo_backup(backup_filepath, db_name, filestore_path, db_user="odoo"
                         "-c", f"SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '{db_name}' AND pid <> pg_backend_pid();",
                         "postgres"
                     ], check=True, env=env, stdout=log_file, stderr=log_file)
-                
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                with open(psql_log, 'r') as log_file:
+                    psql_output = log_file.read()
+                logger.error(f"Terminating connections failed for {db_name}: {e}\nPostgreSQL output: {psql_output}")
+                raise Exception(f"Terminating connections failed for {db_name}: {e}")
+            
+            try:
                 logger.debug(f"Dropping existing database {db_name}")
                 with open(psql_log, 'a') as log_file:
                     subprocess.run([
@@ -276,7 +273,13 @@ def restore_odoo_backup(backup_filepath, db_name, filestore_path, db_user="odoo"
                         "-p", db_port,
                         db_name
                     ], check=True, env=env, stdout=log_file, stderr=log_file)
-            
+            except (subprocess.CalledProcessError, FileNotFoundError) as e:
+                with open(psql_log, 'r') as log_file:
+                    psql_output = log_file.read()
+                logger.error(f"Dropping database failed for {db_name}: {e}\nPostgreSQL output: {psql_output}")
+                raise Exception(f"Dropping database failed for {db_name}: {e}")
+        
+        try:
             logger.debug(f"Creating new database {db_name}")
             with open(psql_log, 'a') as log_file:
                 subprocess.run([
@@ -286,26 +289,30 @@ def restore_odoo_backup(backup_filepath, db_name, filestore_path, db_user="odoo"
                     "-p", db_port,
                     db_name
                 ], check=True, env=env, stdout=log_file, stderr=log_file)
-            
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            with open(psql_log, 'r') as log_file:
+                psql_output = log_file.read()
+            logger.error(f"Creating database failed for {db_name}: {e}\nPostgreSQL output: {psql_output}")
+            raise Exception(f"Creating database failed for {db_name}: {e}")
+        
+        try:
             logger.debug(f"Restoring database from {dump_file}")
-            with open(psql_log, 'a') as log_file:
+            with open(psql_log, 'a') as log_file, open(dump_file, 'r') as dump_in:
                 subprocess.run([
-                    "pg_restore",
+                    "psql",
                     "-U", db_user,
                     "-h", db_host,
                     "-p", db_port,
                     "-d", db_name,
-                    "--no-owner",
-                    "--no-privileges",
-                    dump_file
-                ], check=True, env=env, stdout=log_file, stderr=log_file)
-        except subprocess.CalledProcessError as e:
+                    # "--no-owner",
+                    "--set", "ON_ERROR_STOP=on"
+                ], check=True, env=env, stdin=dump_in, stdout=log_file, stderr=log_file)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
             with open(psql_log, 'r') as log_file:
                 psql_output = log_file.read()
             logger.error(f"Database restoration failed for {db_name}: {e}\nPostgreSQL output: {psql_output}")
             raise Exception(f"Database restoration failed for {db_name}: {e}")
         
-        # Restore the filestore if requested
         if with_filestore:
             filestore_base_path = os.path.join(temp_dir, "filestore")
             target_filestore_path = os.path.join(filestore_path, db_name)
@@ -358,8 +365,8 @@ def duplicate_odoo_database(source_db, target_db, filestore_path, db_user="odoo"
     
     psql_log = os.path.join(temp_dir, "psql_duplicate.log")
     
-    try:
-        if drop_existing:
+    if drop_existing:
+        try:
             logger.debug(f"Terminating connections to target database {target_db}")
             with open(psql_log, 'w') as log_file:
                 subprocess.run([
@@ -370,7 +377,13 @@ def duplicate_odoo_database(source_db, target_db, filestore_path, db_user="odoo"
                     "-c", f"SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '{target_db}' AND pid <> pg_backend_pid();",
                     "postgres"
                 ], check=True, env=env, stdout=log_file, stderr=log_file)
-            
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            with open(psql_log, 'r') as log_file:
+                psql_output = log_file.read()
+            logger.error(f"Terminating connections failed for {target_db}: {e}\nPostgreSQL output: {psql_output}")
+            raise Exception(f"Terminating connections failed for {target_db}: {e}")
+        
+        try:
             logger.debug(f"Dropping existing target database {target_db}")
             with open(psql_log, 'a') as log_file:
                 subprocess.run([
@@ -381,7 +394,13 @@ def duplicate_odoo_database(source_db, target_db, filestore_path, db_user="odoo"
                     "-p", db_port,
                     target_db
                 ], check=True, env=env, stdout=log_file, stderr=log_file)
-        
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            with open(psql_log, 'r') as log_file:
+                psql_output = log_file.read()
+            logger.error(f"Dropping database failed for {target_db}: {e}\nPostgreSQL output: {psql_output}")
+            raise Exception(f"Dropping database failed for {target_db}: {e}")
+    
+    try:
         logger.debug(f"Creating target database {target_db}")
         with open(psql_log, 'a') as log_file:
             subprocess.run([
@@ -391,12 +410,17 @@ def duplicate_odoo_database(source_db, target_db, filestore_path, db_user="odoo"
                 "-p", db_port,
                 target_db
             ], check=True, env=env, stdout=log_file, stderr=log_file)
-        
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        with open(psql_log, 'r') as log_file:
+            psql_output = log_file.read()
+        logger.error(f"Creating database failed for {target_db}: {e}\nPostgreSQL output: {psql_output}")
+        raise Exception(f"Creating database failed for {target_db}: {e}")
+    
+    try:
         logger.debug(f"Copying database from {source_db} to {target_db}")
         with open(psql_log, 'a') as log_file:
             dump_process = subprocess.Popen([
                 "pg_dump",
-                "-F", "c",
                 "-U", db_user,
                 "-h", db_host,
                 "-p", db_port,
@@ -404,13 +428,13 @@ def duplicate_odoo_database(source_db, target_db, filestore_path, db_user="odoo"
             ], stdout=subprocess.PIPE, stderr=log_file, env=env)
             
             restore_process = subprocess.Popen([
-                "pg_restore",
+                "psql",
                 "-U", db_user,
                 "-h", db_host,
                 "-p", db_port,
                 "-d", target_db,
-                "--no-owner",
-                "--no-privileges"
+                # "--no-owner",
+                "--set", "ON_ERROR_STOP=on"
             ], stdin=dump_process.stdout, stderr=log_file, env=env)
             
             dump_process.stdout.close()
@@ -421,24 +445,23 @@ def duplicate_odoo_database(source_db, target_db, filestore_path, db_user="odoo"
                     psql_output = log_file.read()
                 logger.error(f"Database duplication failed from {source_db} to {target_db}\nPostgreSQL output: {psql_output}")
                 raise Exception(f"Database duplication failed from {source_db} to {target_db}")
-        
-        if with_filestore:
-            source_filestore_path = os.path.join(filestore_path, source_db)
-            target_filestore_path = os.path.join(filestore_path, target_db)
-            if os.path.exists(source_filestore_path):
-                logger.debug(f"Copying filestore from {source_filestore_path} to {target_filestore_path}")
-                if os.path.exists(target_filestore_path):
-                    shutil.rmtree(target_filestore_path)
-                shutil.copytree(source_filestore_path, target_filestore_path)
-                logger.info(f"Filestore copied from {source_filestore_path} to {target_filestore_path}")
-            else:
-                logger.warning(f"No filestore found for source database {source_db}")
-    
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
         with open(psql_log, 'r') as log_file:
             psql_output = log_file.read()
         logger.error(f"Database duplication failed for {source_db} to {target_db}: {e}\nPostgreSQL output: {psql_output}")
         raise Exception(f"Database duplication failed for {source_db} to {target_db}: {e}")
+    
+    if with_filestore:
+        source_filestore_path = os.path.join(filestore_path, source_db)
+        target_filestore_path = os.path.join(filestore_path, target_db)
+        if os.path.exists(source_filestore_path):
+            logger.debug(f"Copying filestore from {source_filestore_path} to {target_filestore_path}")
+            if os.path.exists(target_filestore_path):
+                shutil.rmtree(target_filestore_path)
+            shutil.copytree(source_filestore_path, target_filestore_path)
+            logger.info(f"Filestore copied from {source_filestore_path} to {target_filestore_path}")
+        else:
+            logger.warning(f"No filestore found for source database {source_db}")
     
     logger.info(f"Duplication completed from {source_db} to {target_db}")
     return True
@@ -479,7 +502,13 @@ def drop_odoo_database(db_name, filestore_path, db_user="odoo", db_host="localho
                 "-c", f"SELECT pg_terminate_backend(pg_stat_activity.pid) FROM pg_stat_activity WHERE pg_stat_activity.datname = '{db_name}' AND pid <> pg_backend_pid();",
                 "postgres"
             ], check=True, env=env, stdout=log_file, stderr=log_file)
-        
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
+        with open(psql_log, 'r') as log_file:
+            psql_output = log_file.read()
+        logger.error(f"Terminating connections failed for {db_name}: {e}\nPostgreSQL output: {psql_output}")
+        raise Exception(f"Terminating connections failed for {db_name}: {e}")
+    
+    try:
         logger.debug(f"Dropping database {db_name}")
         with open(psql_log, 'a') as log_file:
             subprocess.run([
@@ -490,20 +519,19 @@ def drop_odoo_database(db_name, filestore_path, db_user="odoo", db_host="localho
                 "-p", db_port,
                 db_name
             ], check=True, env=env, stdout=log_file, stderr=log_file)
-        
-        filestore_db_path = os.path.join(filestore_path, db_name)
-        if os.path.exists(filestore_db_path):
-            logger.debug(f"Removing filestore at {filestore_db_path}")
-            shutil.rmtree(filestore_db_path)
-            logger.info(f"Filestore removed for database {db_name} at {filestore_db_path}")
-        else:
-            logger.warning(f"No filestore found for database {db_name} at {filestore_db_path}")
-    
-    except subprocess.CalledProcessError as e:
+    except (subprocess.CalledProcessError, FileNotFoundError) as e:
         with open(psql_log, 'r') as log_file:
             psql_output = log_file.read()
-        logger.error(f"Failed to drop database {db_name}: {e}\nPostgreSQL output: {psql_output}")
-        raise Exception(f"Failed to drop database {db_name}: {e}")
+        logger.error(f"Dropping database failed for {db_name}: {e}\nPostgreSQL output: {psql_output}")
+        raise Exception(f"Dropping database failed for {db_name}: {e}")
+    
+    filestore_db_path = os.path.join(filestore_path, db_name)
+    if os.path.exists(filestore_db_path):
+        logger.debug(f"Removing filestore at {filestore_db_path}")
+        shutil.rmtree(filestore_db_path)
+        logger.info(f"Filestore removed for database {db_name} at {filestore_db_path}")
+    else:
+        logger.warning(f"No filestore found for database {db_name} at {filestore_db_path}")
     
     logger.info(f"Drop completed for {db_name}")
     return True
@@ -565,19 +593,15 @@ def main():
     args.verbose = True if not hasattr(args, 'verbose') else args.verbose
     args.with_filestore = True if not hasattr(args, 'with_filestore') else args.with_filestore
     
-    # Read Odoo config to get log directory
     odoo_config = read_odoo_config(args.odoo_config, logging.getLogger('odoo_db_manager'))
     log_dir = odoo_config.get('log_dir')
     
-    # Set up logging
     logger = setup_logging(args.verbose, args.log_file, log_dir)
     
     try:
-        # Read configuration files
         logger.debug("Reading configuration files")
         backup_config = read_backup_config(args.backup_config, logger)
         
-        # Determine parameters (command-line > backup config > odoo config > defaults)
         db_names = [args.db_name] if args.db_name else backup_config['backup_db_names'] or odoo_config['db_name']
         filestore_path = args.filestore_path or odoo_config['filestore_path']
         backup_dir = args.backup_dir or backup_config['backup_dir']
@@ -589,10 +613,8 @@ def main():
         log_file = args.log_file or backup_config['log_file']
         log_retention_days = args.log_retention_days if args.log_retention_days is not None else backup_config['log_retention_days']
         
-        # Determine log directory for cleanup
         log_file_path = log_file or os.path.join(log_dir or '.', 'odoo_db_manager.log')
         log_dir_for_cleanup = os.path.dirname(log_file_path)
-        
         with tempfile.TemporaryDirectory() as temp_dir:
             if args.action == "backup":
                 if not db_names:

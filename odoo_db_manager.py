@@ -305,7 +305,7 @@ def restore_odoo_backup(backup_filepath, db_name, filestore_path, db_user="odoo"
                     "-p", db_port,
                     "-d", db_name,
                     # "--no-owner",
-                    "--set", "ON_ERROR_STOP=on"
+                    # "--set", "ON_ERROR_STOP=on"
                 ], check=True, env=env, stdin=dump_in, stdout=log_file, stderr=log_file)
         except (subprocess.CalledProcessError, FileNotFoundError) as e:
             with open(psql_log, 'r') as log_file:
@@ -434,7 +434,7 @@ def duplicate_odoo_database(source_db, target_db, filestore_path, db_user="odoo"
                 "-p", db_port,
                 "-d", target_db,
                 # "--no-owner",
-                "--set", "ON_ERROR_STOP=on"
+                # "--set", "ON_ERROR_STOP=on"
             ], stdin=dump_process.stdout, stderr=log_file, env=env)
             
             dump_process.stdout.close()

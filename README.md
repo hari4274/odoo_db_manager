@@ -4,11 +4,11 @@
 ![Odoo](https://img.shields.io/badge/Odoo-10%2B-green)
 ![License](https://img.shields.io/badge/License-MIT-yellow)
 
-An optimized Python script for managing Odoo databases, providing backup, restore, duplicate, and drop functionalities. Compatible with all Odoo versions (10+) using PostgreSQL and ZIP backups with compressed custom-format dumps.
+A simple Python script for managing Odoo databases, providing backup, restore, duplicate, and drop functionalities. Compatible with all Odoo versions (10+) using PostgreSQL and ZIP backups with plain SQL dumps.
 
 ## Features
 
-- **Backup**: Create secure, compressed ZIP backups (`backup_<db_name>_<timestamp>.zip`) of Odoo databases (custom-format dumps) and filestores by default, excluding sensitive data like the master password.
+- **Backup**: Create secure, compressed ZIP backups (`backup_<db_name>_<timestamp>.zip`) of Odoo databases (plain SQL dumps) and filestores by default, excluding sensitive data like the master password.
 - **Restore**: Restore databases and filestores by default from ZIP backups, handling mismatched filestore names (e.g., `filestore/old_dbname` to `target_db`).
 - **Duplicate**: Copy a source database and its filestore by default to a new database.
 - **Drop Database**: Safely drop a database and its filestore, terminating active connections.
@@ -16,16 +16,16 @@ An optimized Python script for managing Odoo databases, providing backup, restor
 - **Configuration**: Supports Odoo (`odoo.conf`) and backup (`backup.conf`) config files, with command-line overrides.
 - **Retention Policy**: Automatically clean up old backups (default: 7 days) and log files (default: 7 days) based on retention periods.
 - **Verbose Logging**: Detailed logs with timestamps enabled by default, saved to `odoo_db_manager.log` in the Odoo log directory, disable with `--no-verbose`.
-- **Log Separation**: PostgreSQL command logs (e.g., `pg_dump`, `pg_restore`) are isolated to temporary files, included in `odoo_db_manager.log` only on errors.
+- **Log Separation**: PostgreSQL command logs (e.g., `pg_dump`, `psql`) are isolated to temporary files, included in `odoo_db_manager.log` only on errors.
 - **Log Configuration**: Customize log file path and retention days via `backup.conf` or command-line (`--log-file`, `--log-retention-days`).
 - **Backup Validation**: Validates ZIP integrity during restoration to prevent corrupted backups.
-- **Optimized Compression**: Uses custom-format database dumps (`pg_dump -F c`) and high-compression ZIP for smaller, faster backups.
+- **SQL Dumps**: Uses plain SQL dumps for universal PostgreSQL compatibility, avoiding version mismatch issues.
 - **Generic Compatibility**: Works with any Odoo version (10 to 18+) using standard PostgreSQL commands.
 
 ## Prerequisites
 
 - **Python**: 3.6 or higher
-- **PostgreSQL**: With `pg_dump`, `pg_restore`, `psql`, `createdb`, and `dropdb` utilities installed
+- **PostgreSQL**: With `pg_dump`, `psql`, `createdb`, and `dropdb` utilities installed and available in the system PATH.
 - **Odoo**: Any version (10+) with a valid configuration file
 - **Permissions**: 
   - PostgreSQL user must have permissions to create, drop, and restore databases.
@@ -40,14 +40,27 @@ An optimized Python script for managing Odoo databases, providing backup, restor
    ```
 
 2. **Install Dependencies**:
-   No external Python libraries are required. Ensure PostgreSQL tools are installed:
+   Install PostgreSQL tools (no Python libraries required):
    ```bash
    sudo apt-get install postgresql-client  # Debian/Ubuntu
    # OR
    sudo yum install postgresql  # CentOS/RHEL
    ```
 
-3. **Save the Script**:
+3. **Verify PostgreSQL Tools**:
+   Ensure `pg_dump`, `psql`, `createdb`, and `dropdb` are in the system PATH:
+   ```bash
+   pg_dump --version
+   psql --version
+   createdb --version
+   dropdb --version
+   ```
+   If not found, add the PostgreSQL binaries to the PATH:
+   ```bash
+   export PATH=$PATH:/usr/lib/postgresql/16/bin
+   ```
+
+4. **Save the Script**:
    The main script is `odoo_db_manager.py`. Ensure it’s executable:
    ```bash
    chmod +x odoo_db_manager.py
@@ -134,29 +147,28 @@ python3 odoo_db_manager.py <action> [options]
 
 ### Examples
 
-1. **Backup with Filestore**:
+1. **Backup**:
    ```bash
    python3 odoo_db_manager.py backup --odoo-config /etc/odoo/odoo.conf --backup-config backup.conf
    ```
-   Creates ZIP files (e.g., `backup_my_odoo_db_2025-05-21_17-30-00.zip`), logs to `/var/log/odoo/odoo_db_manager.log`, cleans up logs older than 7 days.
+   Creates ZIP files (e.g., `backup_my_odoo_db_2025-05-22_10-22-00.zip`), logs to `/var/log/odoo/odoo_db_manager.log`.
 
 2. **Backup without Filestore**:
    ```bash
    python3 odoo_db_manager.py backup --odoo-config /etc/odoo/odoo.conf --db-name my_odoo_db --without-filestore
    ```
-   Creates a ZIP with only the database dump.
+   Creates a ZIP with only the SQL dump.
 
-3. **Restore with Filestore**:
+3. **Restore**:
    ```bash
-   python3 odoo_db_manager.py restore --odoo-config /etc/odoo/odoo.conf --db-name db_stg_test --backup-file /path/to/backup/backup_old_dbname_2025-05-21_17-30-00.zip --drop-existing
+   python3 odoo_db_manager.py restore --odoo-config /etc/odoo/odoo.conf --db-name db_stg_test --backup-file /path/to/backup/backup_old_dbname_2025-05-22_10-22-00.zip --drop-existing
    ```
-   Restores database and filestore, logs to `odoo_db_manager.log`.
+   Restores database and filestore to `db_stg_test`.
 
 4. **Restore without Filestore**:
    ```bash
-   python3 odoo_db_manager.py restore --odoo-config /etc/odoo/odoo.conf --db-name db_stg_test --backup-file /path/to/backup/backup_old_dbname_2025-05-21_17-30-00.zip --drop-existing --without-filestore
+   python3 odoo_db_manager.py restore --odoo-config /etc/odoo/odoo.conf --db-name db_stg_test --backup-file /path/to/backup/backup_old_dbname_2025-05-22_10-22-00.zip --drop-existing --without-filestore
    ```
-   Restores only the database.
 
 5. **Duplicate with Filestore**:
    ```bash
@@ -185,18 +197,18 @@ sudo systemctl start odoo
 
 - **Script Logs**: Saved to `odoo_db_manager.log` in the Odoo log directory (e.g., `/var/log/odoo/`) or as specified by `--log-file` or `backup.conf`. Logs include timestamps and are rotated (10MB limit, 5 backups).
 - **Log Retention**: Old log files (`odoo_db_manager.log.*`) are deleted after 7 days by default, configurable via `log_retention_days` in `backup.conf` or `--log-retention-days`.
-- **PostgreSQL Logs**: Isolated to temporary files (e.g., `/tmp/<random>/pg_dump.log`). Included in `odoo_db_manager.log` only on errors. Verbose mode logs the temporary file paths for debugging.
+- **PostgreSQL Logs**: Isolated to temporary files (e.g., `/tmp/<random>/pg_dump.log`). Included in `odoo_db_manager.log` only on errors. Verbose mode logs temporary file paths.
 - **Example Log Entry**:
   ```
-  2025-05-21 17:30:00,123 - INFO - Starting restore for database db_stg_test from /path/to/backup/backup_old_dbname_2025-05-21_17-30-00.zip with filestore
-  2025-05-21 17:30:00,124 - DEBUG - Extracting ZIP file to /tmp/tmpabc123
+  2025-05-22 10:22:00,123 - INFO - Starting restore for database db_stg_test from /path/to/backup/backup_old_dbname_2025-05-22_10-22-00.zip with filestore
+  2025-05-22 10:22:00,124 - DEBUG - Creating new database db_stg_test
   ```
 
 ## Backup File Structure
 Backups are ZIP files containing:
 ```
 backup_<db_name>_<timestamp>.zip
-├── dump.dump  # Compressed custom-format database dump
+├── dump.sql  # Plain SQL database dump
 └── filestore/  # Only included unless --without-filestore is used
     └── <db_name>/
         ├── <attachment_files>
@@ -226,25 +238,42 @@ backup_<db_name>_<timestamp>.zip
     grep "Cleaning up old log files" /var/log/odoo/odoo_db_manager.log
     ```
 
-- **PostgreSQL Errors**:
-  - If a command fails, check `odoo_db_manager.log` for PostgreSQL output.
-  - Example error:
+- **PostgreSQL Command Not Found**:
+  - If you see an error like:
     ```
-    2025-05-21 17:30:00,123 - ERROR - Database restoration failed for db_stg_test: ...
-    PostgreSQL output: pg_restore: error: could not connect to database
+    ERROR - Database dump failed for my_odoo_db: [Errno 2] No such file or directory: 'pg_dump'
     ```
-  - Verify PostgreSQL credentials and ensure `pg_restore` is installed.
+  - Ensure `pg_dump`, `psql`, `createdb`, and `dropdb` are in the system PATH:
+    ```bash
+    pg_dump --version
+    ```
+  - If not, add the PostgreSQL binaries to the PATH:
+    ```bash
+    export PATH=$PATH:/usr/lib/postgresql/16/bin
+    ```
+  - Verify installation:
+    ```bash
+    sudo apt-get install postgresql-client  # Debian/Ubuntu
+    ```
+
+- **Other PostgreSQL Errors**:
+  - Check `odoo_db_manager.log` for PostgreSQL output:
+    ```bash
+    2025-05-22 10:22:00,123 - ERROR - Database restoration failed for db_stg_test: ...
+    PostgreSQL output: psql: error: relation "res_users" already exists
+    ```
+  - Verify PostgreSQL credentials and database access.
 
 - **Filestore Not Restored**:
   - Verify the ZIP contains `filestore/<db_name>/<files>` if `--without-filestore` was not used:
     ```bash
-    unzip -l /path/to/backup/backup_old_dbname_2025-05-21_17-30-00.zip
+    unzip -l /path/to/backup/backup_old_dbname_2025-05-22_10-22-00.zip
     ```
   - Check `--filestore-path` is correct (e.g., `/var/lib/odoo/filestore`).
 
 - **Debugging**:
   - Verbose logs are enabled by default. Disable with `--no-verbose` for quieter output.
-  - Check temporary PostgreSQL log paths in verbose logs:
+  - Check temporary PostgreSQL log paths:
     ```bash
     grep "PostgreSQL logs at" /var/log/odoo/odoo_db_manager.log
     ```
